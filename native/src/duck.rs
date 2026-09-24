@@ -383,22 +383,41 @@ mod imp {
     }
 
     /// Other processes' playback streams as (index, volume in PulseAudio units).
-    fn streams() -> anyhow::Result<Vec<(u64, u64)>> {
+    fn pactl_list(kind: &str) -> anyhow::Result<serde_json::Value> {
         let output = Command::new("pactl")
-            .args(["-f", "json", "list", "sink-inputs"])
+            .args(["-f", "json", "list", kind])
             .output()?;
         anyhow::ensure!(output.status.success(), "pactl failed");
-        let list: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        Ok(serde_json::from_slice(&output.stdout)?)
+    }
+
+    fn process_id(value: &serde_json::Value) -> Option<&str> {
+        value
+            .pointer("/properties/application.process.id")
+            .and_then(|pid| pid.as_str())
+    }
+
+    fn streams() -> anyhow::Result<Vec<(u64, u64)>> {
+        let list = pactl_list("sink-inputs")?;
         let own = std::process::id().to_string();
+        // PipeWire's ALSA plugin puts the process ID on the client, not the stream, so our
+        // own playback is only recognisable through its client.
+        let own_clients: Vec<u64> = pactl_list("clients")?
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|client| process_id(client) == Some(own.as_str()))
+            .filter_map(|client| client.get("index")?.as_u64())
+            .collect();
         Ok(list
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|stream| {
-                let pid = stream
-                    .pointer("/properties/application.process.id")
-                    .and_then(|pid| pid.as_str());
-                if pid == Some(own.as_str()) {
+                let client = stream.get("client").and_then(|client| client.as_u64());
+                if process_id(stream) == Some(own.as_str())
+                    || client.is_some_and(|client| own_clients.contains(&client))
+                {
                     return None;
                 }
                 let index = stream.get("index")?.as_u64()?;
