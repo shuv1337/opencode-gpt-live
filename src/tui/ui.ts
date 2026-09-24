@@ -59,15 +59,26 @@ export function mix(a: RGBA, b: RGBA, t: number) {
 
 function palette(theme: Theme) {
   const bg = theme.background.base
+  // Only accent, interactive and neutral are guaranteed; themes migrated from v1 omit the named hues.
+  const hues = theme.hue as unknown as Record<string, Record<number, RGBA> | undefined>
+  const feedback = theme.text.feedback
   return {
     bg,
     text: theme.text.base,
     muted: theme.text.muted,
-    mic: [theme.hue.cyan[300], theme.hue.cyan[500], theme.hue.blue[400]] as const,
-    speaker: [theme.hue.purple[300], theme.hue.purple[500], theme.hue.accent[500]] as const,
-    live: theme.hue.green[500],
-    warn: theme.hue.yellow[500],
-    error: theme.hue.red[500],
+    mic: [
+      hues.cyan?.[300] ?? theme.hue.interactive[300],
+      hues.cyan?.[500] ?? theme.hue.interactive[500],
+      hues.blue?.[400] ?? feedback.info.base,
+    ] as const,
+    speaker: [
+      hues.purple?.[300] ?? theme.hue.accent[300],
+      hues.purple?.[500] ?? theme.hue.accent[500],
+      theme.hue.accent[500],
+    ] as const,
+    live: hues.green?.[500] ?? feedback.success.base,
+    warn: hues.yellow?.[500] ?? feedback.warning.base,
+    error: hues.red?.[500] ?? feedback.error.base,
     accent: theme.hue.accent[500],
     dim: mix(theme.text.muted, bg, 0.45),
   }
@@ -546,8 +557,9 @@ export class Frames {
           animating = true
           period = Math.min(period, view.interval?.() ?? 33)
         }
-      } catch {
+      } catch (error) {
         // Keep other views and the call alive if one view fails to draw.
+        debug({ event: "view-error", error: error instanceof Error ? (error.stack ?? error.message) : String(error) })
       }
     }
     if (this.timer && (!animating || period !== this.period)) {
